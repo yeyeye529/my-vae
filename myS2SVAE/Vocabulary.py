@@ -1,5 +1,4 @@
 from collections import defaultdict
-import logging
 
 class vocabulary(object):
     def __init__(self, max_vocab_size = 1000000):
@@ -10,7 +9,6 @@ class vocabulary(object):
         self.unk_id = 2
         self.pad_id = 3
         self._max_vocab_size = max_vocab_size
-        self.logger = logging.getLogger('vocabulary')
         pass
 
     @property
@@ -38,7 +36,6 @@ class vocabulary(object):
                 vocab_with_cnt[w] += 1
 
         print("Original vocab size = ", len(vocab_with_cnt))
-        self.logger.info("Original vocab size = " + str(len(vocab_with_cnt)))
         i = 0
         for w, cnt in vocab_with_cnt.items():
             if cnt > remove_low_freq:
@@ -47,7 +44,6 @@ class vocabulary(object):
             if i > self._max_vocab_size:
                 break
         print("Now vocab size = ", len(vocab))
-        self.logger.info("Now vocab size = " + str(len(vocab)))
         vocab.sort()
         vocab_new = ['<s>', '</s>', '<unk>', '<pad>']  # <s>: begin of sentence; </s>: end of sentence; <unk>: unknown word
         vocab_new += vocab

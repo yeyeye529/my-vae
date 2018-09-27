@@ -2,21 +2,19 @@
 from __future__ import print_function
 from __future__ import unicode_literals
 from __future__ import division
-import sys
-# sys.path.insert(0, '/home/shiwenxian/vae')
-sys.path.insert(0, '..')
 import torch
 from Model import vinilla_seq2seq
 from Model import vinilla_vae
 from Model import vnmt
 from Model import gmmvae
-from myS2SVAE.utils import Utils
+from utils import Utils
 from Vocabulary import vocabulary
 from evaluator import evaluator
 from utils import my_logging
 import logging
 from trainer import trainer
 from Batch import Batch
+from evals import knn
 import time
 
 import argparse
@@ -73,9 +71,9 @@ def read_parameters(config_file = None):
             # NN Parameters:
             'embedding_size': 128,
             'hidden_size': 256,
-            'learning_rate': 5e-4,  # * ADAM: [1e-3], 5e-4; SGD: 1e-2
+            'learning_rate': 5e-4,  # (***) ADAM: [1e-3], 5e-4; SGD: 1e-2
             'drop_out': 0.3,
-            'verbose_freq': 100,  # 隔多少个batch输出一次信息: 200
+            'verbose_freq': 200,  # 隔多少个batch输出一次信息
             'stop_threshold': 1e-3,  # 这个现在没有用。
             'lr_decay': True,  # 是否学习率衰减。
             'lr_decay_period': 6000,  # 这个暂时也没有用。目前的衰减方案是训练集上loss上升或者训练过半。
@@ -98,27 +96,28 @@ def read_parameters(config_file = None):
             'beam_size': 5,
             # VAE:
             'share_encoder': True,  # vae 的encoding和decoding部分是否共享encoder。
-            'z_size': 10,  # 隐空间维度: 建议：等于hidden_size 256
+            'z_size': 256,  # (***) 隐空间维度: 建议：等于hidden_size 256
             'z_sample_num': 1,  # vae采样z的个数
             'training_z_sample_num': 1,  # 忽略
             'decoder_input_dropout': 0.0,  # encoder dropout概率，建议设成0.
-            'active_func': 'relu',  # 激活函数类型。不用激活函数就设成：'None'
+            'active_func': 'None',  # 激活函数类型。不用激活函数就设成：'None'
             # Pre-training:
             'pre_training': False,  # 是否要预训练。
             'pre_training_epoch': 10,  # 预训练轮数
             # vnmt:
-            'mean_pooling': False,  # 是否使用mean_pooling
+            'mean_pooling': False,  # (***) 是否使用mean_pooling
             'decoder_attention': True,  # decoder端是否用attention
-            'vae_attention': True,  # 是否用vae attention
-            'vae_attention_method': 'share',   # vae attention方式： ['share', 'dot', 'general']
-            'bow_loss': False,  # 是否使用bow loss
-            'use_decoder_encoding': True,  # 在encoding部分是否加入decoder。
+            'vae_attention': True,  # (***) 是否用vae attention
+            'vae_attention_method': 'asign_alla',   # vae attention方式： ['share', 'dot', 'general', 'asign_alla', 'asign_allz']
+            'bow_loss': True,  # (***) 是否使用bow loss
+            'bow_loss_w': 1.0,
+            'use_decoder_encoding': False,  # 在encoding部分是否加入decoder。
             'vae_first_embedding': False,  # 是否将隐变量z作为第一个时刻的embedding使用。
             'without_post_cat': False, # 要不要将原句和目标句的隐变量拼接起来。
             # Testing:
             'filter': 'maxbleu', # ['maxbleu', 'wmd'] 筛选方式。
             # gmmvae:
-            'k': 200,
+            'k': 100, # !
             'cluster_check_period': 20,  # 每隔多少个epoch输出一张聚类情况图
             'batch_normalize': True,
             'gmm_period': 80,
@@ -126,25 +125,21 @@ def read_parameters(config_file = None):
             'cluster_loss': True,
             'closs_lambda': 0.0,
             'adjust_gaussian_var': False,
-            'pretrain_s2s': True,
-            's2s_model_fn': 'models/model_s2s_tl=50.md',
+            'pretrain_s2s': False, # !
+            's2s_model_fn': 'model_s2s_tl=50',
             'alternating_training': False,
             'resample_gaussian': False,
-            # cls
-            'use_cls': False,
-            # output setttings:
-            'ckpt_period': 2000,
-            # other???
-            'draw_pics': False,
-            'pics_dir': '123',
             'different_lr': False,
-            'bow_loss_w': 1.0,
-            'hidden_reconstruction_loss_w': 0.0,
-            're_gaussian': False,
-            'kl_annealing_style': 'slower',
-            'begin_with': 1.0,
-            'vae_first_h': True,
-
+            'vae_first_h': True,  # !
+            'hidden_reconstruction_loss': False,
+            'hidden_reconstruction_loss_w': 1.0,
+            'draw_pics': False,
+            'pics_dir': '34_k50_z256_re_s2s_noKA_noMax', # !
+            'kl_annealing_style': 'none', # ['faster', 'slower', 'none', 'fasterer'] # !
+            'begin_with': 0.0, # !
+            're_gaussian': False, # !
+            # cls
+            'use_cls': False
         }
         model_name = 'gmmvae'
         fn_quora = {
@@ -180,6 +175,9 @@ def read_parameters(config_file = None):
     # TODO: only support seq2seq/vnmt/VAE model now.
     if data['model_name'] not in ['seq2seq', 'vnmt', 'VAE', 'gmmvae']:
         raise ValueError("Error model name: " + data['model_name'])
+
+    # print("Model:", data['model_name'])
+    # print("K:", data['k'])
     return data
 
 def preprocessing(fn, parameters, fn_unparallel, use_cuda):
@@ -285,7 +283,9 @@ def init_model(model_type, parameters):
                             decoder_rnn_style=parameters['decoder_rnn_style'],
                             encoder_rnn_style=parameters['encoder_rnn_style'],
                             share_encoder=parameters['share_encoder'],
-                            decoder_input_dropout=parameters['decoder_input_dropout'])
+                            decoder_input_dropout=parameters['decoder_input_dropout'],
+                            vae_first_h=parameters['vae_first_h'],
+                            bow_loss=parameters['bow_loss'])
     elif (model_type == 'vnmt'):
         model = vnmt(embedding_size=parameters['embedding_size'],
                      hidden_size=parameters['hidden_size'],
@@ -309,7 +309,8 @@ def init_model(model_type, parameters):
                      z_sample_num=parameters['training_z_sample_num'],
                      bow_loss=parameters['bow_loss'],
                      use_decoder_encoding=parameters['use_decoder_encoding'],
-                     share_encoder=parameters['share_encoder'])
+                     share_encoder=parameters['share_encoder'],
+                     vae_first_h=parameters['vae_first_h'])
     elif (model_type == 'gmmvae'):
         model = gmmvae(embedding_size=parameters['embedding_size'],
                        hidden_size=parameters['hidden_size'],
@@ -337,13 +338,13 @@ def init_model(model_type, parameters):
                        vae_first_embedding=parameters['vae_first_embedding'],
                        share_encoder=parameters['share_encoder'],
                        resample_gaussian=parameters['resample_gaussian'],
-                       vae_first_h=parameters['vae_first_h'],)
+                       batch_normalize=parameters['batch_normalize'],
+                       vae_first_h=parameters['vae_first_h'],
+                       hidden_reconstruction=parameters['hidden_reconstruction_loss'])
     return model
-
 
 if __name__ == '__main__':
     # todo: batch normalization
-
 
     # Argument Parsing:
     parser = argparse.ArgumentParser(description='RNNVAE')
@@ -358,7 +359,6 @@ if __name__ == '__main__':
     parser.add_argument('--save-parameters', help='save current parameter settings.',
                         type=str)
     parser.add_argument('--pretrain-model', help='pre-train model name.', type=str, default="")
-    parser.add_argument('--bleu-n', help='bleu n.', type=int, default=4)
 
     args = parser.parse_args()
     Train = args.t
@@ -369,12 +369,10 @@ if __name__ == '__main__':
     results_folder = os.path.join("results", args.model)
     if not os.path.exists(results_folder):
         os.makedirs(results_folder)
-
     config_fn = args.c
     gpu_idx = args.gpu_idx
     use_cuda = args.use_cuda
     pretrain_model = args.pretrain_model
-    bleu_n = args.bleu_n
     print("pre-train-model:", pretrain_model)
 
     # Logging file:
@@ -395,7 +393,8 @@ if __name__ == '__main__':
     else:
         logger.info("Saving config to " + "loggings/" + model_fn + ".config")
         if not os.path.exists("loggings/" + model_fn + ".config"):
-            save_parameters("loggings/" + model_fn + "." + str(time_ticks) + ".config", data['parameters'], data['model_name'], data['fn'], data['fn_unparallel'])
+            save_parameters("loggings/" + model_fn + "." + str(time_ticks) + ".config", data['parameters'],
+                            data['model_name'], data['fn'], data['fn_unparallel'])
     parameters = data['parameters']
     model_name = data['model_name']
     fn = data['fn']
@@ -409,6 +408,7 @@ if __name__ == '__main__':
     if parameters['use_cls']:
         cls_id, cls, _ = Utils.load_class_info("../data/mscoco_top3_trn.info")
         print('cls num = ', len(cls))
+        parameters['k'] = len(cls)
     else:
         cls_id = cls = None
 
@@ -417,6 +417,7 @@ if __name__ == '__main__':
 
         if Train:
             # Begin training:
+            save_model_file_name = model_fn + ".md"
             eval_dev = evaluator(sentences_ids['dev'][0], sentences_ids['dev'][1], sentences_lengths['dev'][0],
                                  sentences_lengths['dev'][1],
                                  parameters, vocab, model_type=model_name)
@@ -449,18 +450,25 @@ if __name__ == '__main__':
                                gmm_period=parameters['gmm_period']
                                )
         # Begin testing:
-        load_model_file_name = os.path.join(models_folder, model_fn + ".pkl") # model_fn + ".md"
+        load_model_file_name = os.path.join(models_folder, model_fn + ".pkl")  # model_fn + ".md"
         output_trans_sentences_file_name = os.path.join(results_folder, "trans_sentences_" + model_fn + ".txt")
         output_hyp_file_name = os.path.join(results_folder, "hyp_" + model_fn + ".txt")
         output_ref_file_name = os.path.join(results_folder, "ref_" + model_fn + ".txt")
         output_all_trans_file_name = os.path.join(results_folder, "all_trans_" + model_fn + ".txt")
         if not Train:
             model.load_state_dict(torch.load(load_model_file_name))
+
+        # test for KNN:
+        # knn.knn_eval(model, 1, 64, sentences_ids['dev'][0],
+        #              sentences_ids['dev'][1], sentences_lengths['dev'][0],
+        #              sentences_lengths['dev'][1],True)
+        # exit()
+
         eval_test = evaluator(sentences_ids['test'][0], sentences_ids['test'][1], sentences_lengths['test'][0],
                               sentences_lengths['test'][1],
                               parameters, vocab, model_type=model_name,  # <-- model_type
                               output=True, output_path=output_trans_sentences_file_name,
-                              bleu_n=bleu_n)  # <-- remember to change the filename!
+                              )  # <-- remember to change the filename!
         eval_test.eval(model, False, sample_z_num=parameters['z_sample_num'],
                        output_hyp_file=output_hyp_file_name,
                        output_ref_file=output_ref_file_name,

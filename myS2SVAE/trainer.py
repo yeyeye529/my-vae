@@ -166,9 +166,10 @@ class trainer(object):
         my_model_dict.update(s2s_model_dict)
         my_model.load_state_dict(my_model_dict)
 
-    def training(self, model, batch_control, parameters, vocab, model_type='seq2seq',
+    def training(self, model, batch_control, parameters, vocab, model_name, model_type='seq2seq',
                  optimizer_type='SGD', pretrain_model = "", gmm_init_gaussian_parameters = False, gmm_period = MAX_INT,
-                 criterion_type="NLLLoss", save_model=False, save_model_path="", evaluator=None, pp_knowledge = None):
+                 criterion_type="NLLLoss", save_model=False, save_model_dir="", save_results_dir="",
+                 evaluator=None, pp_knowledge = None):
         self.logger.info("Begin training.")
         print(gmm_init_gaussian_parameters)
         print(gmm_period)
@@ -234,10 +235,6 @@ class trainer(object):
         lr = parameters['learning_rate']
 
         for i in range(parameters['epoch_num']):
-            if save_model and i % 10 == 0:
-                torch.save(model.state_dict(), save_model_path + "ckpt.e" + str(i))
-
-
             print('Epoch', i)
             logging.info('Epoch '+str(i))
             bow_weight = self.adjust_bow_weigt(i)
@@ -269,6 +266,9 @@ class trainer(object):
             while batch_control.have_next_batch():
                 ii += 1
                 epoch_ii += 1
+
+                if save_model and ii % parameters['ckpt_period'] == 0:
+                    torch.save(model.state_dict(), os.path.join(save_model_dir, model_name + ".ckpt" + str(ii) + ".pkl"))
 
                 if model_type == 'gmmvae' and parameters['re_gaussian'] and  ii == 2000:
                     # batch_output = batch_control.next_batch(fix_batch=True)
@@ -456,9 +456,6 @@ class trainer(object):
             if model_type == 'gmmvae' and parameters['resample_gaussian']:
                 model.resample_gaussian()
 
-
-
-
         if save_model:
-            torch.save(model.state_dict(), save_model_path)
+            torch.save(model.state_dict(), os.path.join(save_model_dir, model_name+".pkl"))
         return model

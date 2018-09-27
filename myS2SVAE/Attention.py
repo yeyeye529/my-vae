@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.autograd import Variable
 
 # from onmt.modules.UtilClass import BottleLinear
-from utils.Utils import aeq, sequence_mask
+from myS2SVAE.utils.Utils import aeq, sequence_mask
 
 
 class DotAttention(nn.Module):

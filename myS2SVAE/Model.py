@@ -1157,6 +1157,42 @@ class vinilla_vae(nn.Module):
         else:
           return mu
 
+    def encoding(self, input_idx, tgt_idx, context_lengths_src, context_lengths_tgt, cal_tgt=True):
+        encoder_input = input_idx
+        decoder_input = tgt_idx
+
+        if self.share_encoder:
+            encoder_hs, encoder_ht = self.encoder(encoder_input, self.encoder_hidden, context_lengths_src)
+        else:
+            encoder_hs, encoder_ht = self.encoder1(encoder_input, self.encoder_hidden, context_lengths_src)
+        output_log_softmax, hidden, attns = \
+            self.decoder1(decoder_input, encoder_hs, torch.LongTensor(context_lengths_src), encoder_ht)
+
+        if self.training:
+            if self._batch_first:
+                h_t = hidden.transpose(0,1)[-1]
+            else:
+                h_t = hidden[-1]
+            z_mu = self.fc_mu(h_t)
+            z_logvar = self.fc_var(h_t)
+            # z_mu = self.relu(self.fc_mu(h_t))
+            # z_logvar = self.relu(self.fc_var(h_t))
+            z = self.reparameterize(z_mu, z_logvar)
+        else:
+            z = Variable(torch.zeros(self.batch_size, self.z_size).normal_())
+            z = z.cuda() if self.use_cuda else z
+
+        # VAE Decoding part:
+        if self.share_encoder:
+            encoder_hs, encoder_ht = self.encoder(encoder_input, self.encoder_hidden, context_lengths)
+        else:
+            encoder_hs, encoder_ht = self.encoder2(encoder_input, self.encoder_hidden, context_lengths)
+        output_log_softmax, hidden, attns = \
+            self.decoder2(decoder_input, encoder_hs, torch.LongTensor(context_lengths), encoder_ht, z.unsqueeze(1))
+
+        return {'representation_src': z_mu_prior, 'representation_tgt': z_mu_post}
+
+
     def forward(self, input_idx, tgt_idx, context_lengths):
         encoder_input = input_idx
         decoder_input = tgt_idx
