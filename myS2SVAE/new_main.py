@@ -144,6 +144,11 @@ def read_parameters(config_file = None):
             'kl_annealing_style': 'slower',
             'begin_with': 1.0,
             'vae_first_h': True,
+            # new gmmvae parameters:
+            'decoder_use_c': False,
+            'mean_zloss': True,
+
+
 
         }
         model_name = 'gmmvae'
@@ -337,7 +342,8 @@ def init_model(model_type, parameters):
                        vae_first_embedding=parameters['vae_first_embedding'],
                        share_encoder=parameters['share_encoder'],
                        resample_gaussian=parameters['resample_gaussian'],
-                       vae_first_h=parameters['vae_first_h'],)
+                       vae_first_h=parameters['vae_first_h'],
+                       decoder_use_c=parameters['decoder_use_c'],)
     return model
 
 

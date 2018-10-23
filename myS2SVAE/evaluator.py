@@ -12,6 +12,7 @@ from wmd.wmd import get_distance
 import math
 import logging
 from collections import defaultdict
+import json
 # from evals import knn
 
 
@@ -39,20 +40,27 @@ class evaluator(object):
 
     def eval(self, forward_nn, teaching_force, sample_z_num = 1,
              output_hyp_file = None, output_ref_file = None, output_all_trans = None,
-             filter = 'maxbleu', one_ref = False, sample_from_prior = True):
+             filter = 'maxbleu', one_ref = False, sample_from_prior = False,
+             eval_mode = "normal"):
         # self.check_clusters(forward_nn)
         # exit()
-        logging.info("Begin evalution.")
-        if output_hyp_file != None:
-            fout_hyp = open(output_hyp_file, "w")
-        if output_ref_file != None:
-            fout_ref = open(output_ref_file, "w")
-        if output_all_trans != None:
-            fout_all_trans = open(output_all_trans, "w")
 
-        record_cls = defaultdict(int)
-        sent_cls = defaultdict(list)
-        real_cls_ids = np.array([50, 62, 94, 98, 30, 15])
+        assert eval_mode in ("normal", "output_cluster")
+
+        logging.info("Begin evalution.")
+        if eval_mode == "normal":
+            if output_hyp_file != None:
+                fout_hyp = open(output_hyp_file, "w")
+            if output_ref_file != None:
+                fout_ref = open(output_ref_file, "w")
+            if output_all_trans != None:
+                fout_all_trans = open(output_all_trans, "w")
+        if eval_mode == "output_cluster":
+            record_cls = defaultdict(int)
+            sent_cls = defaultdict(list)
+            sample_from_prior = True
+            sample_z_num = 1
+        # real_cls_ids = np.array([50, 62, 94, 98, 30, 15])
 
         forward_nn.eval()
         # Batch first!
@@ -76,6 +84,27 @@ class evaluator(object):
         if self.model_type == 'seq2seq':
             sample_beam_search = sample_z_num
             sample_z_num = 1
+
+
+        if eval_mode == "output_cluster" and self.model_type == "gmmvae":
+            # print(forward_nn.gaussion_mus.size())
+            # print(forward_nn.gaussion_mus[3,:])
+            # print(forward_nn.gaussion_mus[6,:])
+            # print(forward_nn.gaussion_mus[8,:])
+            inner_product = torch.mm(forward_nn.gaussion_mus, forward_nn.gaussion_mus.transpose(0, 1))
+            print(inner_product)
+            length = torch.diag(inner_product, 0)
+            print(length)
+            # print(torch.diag(inner_product, 0))
+            # print(length.expand(10, 10))
+            # print(length.view(10,1).expand(10, 10))
+            distance = length.view(10,1).expand(10, 10) + length.expand(10, 10) - 2 * inner_product
+            print(distance)
+
+            # print(forward_nn.gaussion_vars[3:])
+            # print(forward_nn.gaussion_vars[6:])
+            # print(forward_nn.gaussion_vars[8:])
+            exit()
 
         for i in range(len(self.src_list)):
             print(i)
@@ -146,14 +175,18 @@ class evaluator(object):
                     cludis_src = forward_nn.cluster_prob(representation_src)
                     # print(cludis_src)
                     topv, topi = cludis_src.data.topk(1)
-                    print("cls",topi[0][0])
+                    # print("cls",topi[0][0])
                     # print(cludis_src.size())
-                    print(cludis_src.squeeze().data.cpu().numpy()[real_cls_ids])
-                    if topi[0][0] > 0.5:
-                        sent_cls[topi[0][0]].append(i)
+                    # print(cludis_src.squeeze().data.cpu().numpy()[real_cls_ids])
+                    if eval_mode == "output_cluster":
+                        print(topi[0][0].item())
+                        print(cludis_src[0].data.cpu())
+                        # print(cludis_src[0].data.cpu()[3, 6, 8])
+                        if topi[0][0] > 0.5:
+                            sent_cls[topi[0][0].item()].append(i)
 
-                    record_cls[topi[0][0]] += 1
-                    continue
+                        record_cls[topi[0][0].item()] += 1
+                        continue
                     # print(forward_nn.gaussion_mus.size())
                     # print(forward_nn.gaussion_vars.size())
                     mu = forward_nn.gaussion_mus[topi[0][0]]
@@ -190,6 +223,7 @@ class evaluator(object):
 
             info = []
             for k in range(sample_z_num):
+
                 beam = Beam(self.beam_size, self.vocab.word2idx)
                 decoded_ids = [self.bos_id]
 
@@ -208,6 +242,8 @@ class evaluator(object):
                         z = z.unsqueeze(0)
                     if forward_nn.vae_first_embedding:
                         z_embedding = forward_nn.z2embedding(z)
+
+                    c = forward_nn.get_c(forward_nn.cluster_prob(z))
 
                 encoder_ht = encoder_ht_bak
                 encoder_hs = encoder_hs_bak
@@ -231,12 +267,12 @@ class evaluator(object):
                                 use_z_embedding = False
                             output_log_softmax, hidden, _ = \
                                 forward_nn.decoder(decoder_input, encoder_hs, encoder_lengths,
-                                             encoder_ht, use_z_embedding=use_z_embedding, z_embedding=z_embedding, padding=False)
+                                             encoder_ht, use_z_embedding=use_z_embedding, z_embedding=z_embedding, padding=False, c=c)
                         else:
                             if forward_nn.use_attention:
                                 output_log_softmax, hidden, attns = \
                                     forward_nn.decoder(decoder_input, encoder_hs, encoder_lengths, encoder_ht, z,
-                                                        padding=False, first_step=first_step)
+                                                        padding=False, first_step=first_step, c=c)
                             else:
                                 output_log_softmax, hidden = \
                                     forward_nn.decoder(decoder_input, encoder_hs, encoder_lengths, encoder_ht, z,
@@ -318,7 +354,7 @@ class evaluator(object):
                     log_p = beam.get_best()[0]
                     one_trans_info['log_p'] = log_p[0]
 
-                    decoded_ids.extend(sent)
+                    decoded_ids.extend([w.item() for w in sent])
                     for idx in range(0, len(decoded_ids)):
                         if decoded_ids[idx] == self.eos_id:
                             break
@@ -382,14 +418,16 @@ class evaluator(object):
             precision_collect.append(precision)
             recall_collect.append(recall)
 
-        print(record_cls)
-        tout = open("testout_sentcls.txt", "w")
-        for cls in sent_cls:
-            tout.write(str(cls) + "\n")
-            for s in sent_cls[cls]:
-                tout.write(' '.join([self.vocab.vocab[x] for x in self.src_list[s][:self.src_lengths[s]]]))
-                tout.write("\n")
-        exit()
+        if eval_mode == "output_cluster":
+            print(record_cls)
+            tout = open("testout_sentcls.txt", "w")
+            for cls in sent_cls:
+                tout.write(str(cls) + "\n")
+                for s in sent_cls[cls]:
+                    tout.write(' '.join([self.vocab.vocab[x] for x in self.src_list[s][:self.src_lengths[s]]]))
+                    tout.write("\n")
+            exit()
+        # exit()
 
         print("Average bleu(tgt to src):", sum(bleus_tgt_to_src) / len(bleus_tgt_to_src))
         print('Average bleu:', sum(bleus_ave) / len(bleus_ave))
@@ -470,11 +508,12 @@ class evaluator(object):
                                                   logvar=model_output['logvar'],
                                                   bow_log_softmax=model_output['bow_loss'],
                                                   context_lengths=batch_tgt_lengths,
-                                                    is_train=False
+                                                    is_train=False,
                                                     )
 
 
-            loss_float = float(loss.data[0])
+            # loss_float = float(loss.data[0])
+            loss_float = loss.data.item()
             losses.append(loss_float)
         ave_loss = sum(losses) / len(losses)
         print("Ave loss:", ave_loss)
@@ -484,6 +523,92 @@ class evaluator(object):
 
         return ave_loss
         # print("Epoch", epoch_average_losses)
+
+    def sampling(self, forward_nn, sample_z_num):
+        if self.model_type != "gmmvae":
+            logging.info("False: merely support sampling in gmmvae models.")
+            return False
+
+        for i in range(forward_nn.k):
+            logging.info('cluster' + str(i) + "\n")
+            print('cluster', i)
+
+            std = forward_nn.gaussion_vars[i, :]
+            mu = forward_nn.gaussion_mus[i, :]
+
+            for zsmp in range(sample_z_num):
+                beam = Beam(self.beam_size, self.vocab.word2idx)
+                decoded_ids = [self.bos_id]
+
+                # reparameterization:
+                eps = Variable(std.data.new(std.size()).normal_())
+                z = eps.mul(std).add_(mu)
+                z = z.cuda() if self.use_cuda else z
+                z = z.unsqueeze(0) if z.dim() == 1 else z
+                z = z.unsqueeze(0) if z.dim() == 2 else z
+
+                # prepare input:
+                c = forward_nn.get_c(forward_nn.cluster_prob(z))
+                encoder_ht = forward_nn.decoder.initHidden()
+                decoder_input = Variable(torch.LongTensor([[self.bos_id]]))  # input: <s>
+                decoder_input = decoder_input.cuda() if self.use_cuda else decoder_input
+
+                # decoding
+                for di in range(self.max_len - 1):
+                    first_step = (di == 0)
+                    output_log_softmax, hidden, attns = forward_nn.decoder(decoder_input, None, None, encoder_ht, z, padding=False, first_step=first_step, c=c)
+                    if (beam.advance(output_log_softmax.squeeze(1).data) == True):   # Done
+                        break
+
+                    decoder_input = Variable(beam.get_current_state().unsqueeze(1))   # LongTensor of size [beam_search]  -> batch(beam_size) x str_len(=1)
+                    if (hidden.size(0) == 1):  # if the beginning: 1 * 1 * hidden_size
+                        encoder_ht = hidden.repeat(self.beam_size, 1, 1) # 1 x 1 x hidden_size -> beam_size x 1 x hidden_size
+                    else:
+                        encoder_ht = hidden[beam.get_current_origin()]
+
+                    if (self.model_type == 'VAE' or self.model_type == 'vnmt' or self.model_type == 'gmmvae') and di == 0:
+                        if z.dim() == 2:
+                            z = z.repeat(self.beam_size, 1)
+                        elif z.dim() == 3:
+                            z = z.repeat(self.beam_size, 1, 1)
+
+                # get sentence:
+                sent = beam.get_hyp(0)
+                log_p = beam.get_best()[0]
+                decoded_ids.extend([w.item() for w in sent])
+                for idx in range(0, len(decoded_ids)):
+                    if decoded_ids[idx] == self.eos_id:
+                        break
+                decoded_ids = decoded_ids[:idx+1] # +2
+
+                logging.info(' '.join([self.vocab.vocab[w] for w in decoded_ids]) + "\n")
+                print(' '.join([self.vocab.vocab[w] for w in decoded_ids]))
+
+
+    def get_cluster_in_batch(self, forward_nn):
+        # input: batch_size
+        cls_cnt = defaultdict(int)
+        forward_nn.eval()
+        batch_control = Batch(self.src_list, self.tgt_list, self.src_lengths, self.tgt_lengths, self.batch_size,
+                              is_shuffle=False)  # Shuffle = True
+        batch_control.init_batch()
+        while batch_control.have_next_batch():
+            batch_output = batch_control.next_batch()
+            encoder_input = batch_output[0]
+            decoder_input = batch_output[1]
+            batch_src_lengths = batch_output[2]
+            batch_tgt_lengths = batch_output[3]
+
+            model_output = forward_nn(encoder_input, decoder_input, batch_src_lengths, batch_tgt_lengths)
+            topv, topi = model_output['cludis_src'].data.topk(1)
+            for k in topi:
+                cls_idx = topi[k][0].item()
+                cls_cnt[cls_idx] += 1
+
+        print(cls_cnt)
+        logging.info(json.dumps(cls_cnt) + "\n")
+        forward_nn.train()
+
 
     def sort(self, inverse=False):
         if inverse:

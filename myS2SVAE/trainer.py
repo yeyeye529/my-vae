@@ -39,13 +39,15 @@ class trainer(object):
     def adjust_kl_weight(self, batch_num, v = 'slower', begin_with = 0.0):
         # none:
         if v == "none":
+            # return 0.0
+            return 0.01
             return 1.0
 
         # slower:
         if v == 'slower':
             if begin_with == 0.0:
                 if batch_num < 10000:
-                    return 0.001
+                    return 0.000
                 return min(((batch_num - 10000) // 1000) * 0.002 + 0.002, 1.0)
             else:
                 return min(((batch_num) // 1000) * 0.002 + begin_with, 1.0)
@@ -104,7 +106,7 @@ class trainer(object):
     def check_bleu(self, decoder_input, decoder_output_logsoftmax, tgt_lengths):
         topv, topi = decoder_output_logsoftmax.data.topk(1)
         topi.squeeze_(dim=2)
-        return bleu_init(topi, decoder_input.data, tgt_lengths, tgt_lengths)
+        return bleu_init(topi.cpu().numpy(), decoder_input.data.cpu().numpy(), tgt_lengths, tgt_lengths)
 
     def get_vecs(self, model, src_list, src_lengths, batch_size, use_cuda):
         model.eval()
@@ -223,7 +225,10 @@ class trainer(object):
                                               bow_loss_w=parameters['bow_loss_w'],
                                               cluster_loss=parameters['cluster_loss'],
                                               closs_lambda=parameters['closs_lambda'],
-                                              hidden_rcs_w=parameters['hidden_reconstruction_loss_w'])
+                                              hidden_rcs_w=parameters['hidden_reconstruction_loss_w'],
+                                              mean_zloss=parameters['mean_zloss'],
+                                              KLD_weight=parameters['KLD_weight'],
+                                              unconditional=parameters['unconditional'])
 
         # Begin training:
         ii = 0
@@ -270,14 +275,18 @@ class trainer(object):
                 if save_model and ii % parameters['ckpt_period'] == 0:
                     torch.save(model.state_dict(), os.path.join(save_model_dir, model_name + ".ckpt" + str(ii) + ".pkl"))
 
-                if model_type == 'gmmvae' and parameters['re_gaussian'] and  ii == 2000:
+                if ii % parameters['sampling_period'] == 0:
+                    evaluator.get_cluster_in_batch(forward_nn=model)
+                    evaluator.sampling(model, sample_z_num=parameters['z_sample_num'])
+
+                if model_type == 'gmmvae' and parameters['re_gaussian'] and  ii % 100 == 0:
                     # batch_output = batch_control.next_batch(fix_batch=True)
                     from utils import GMM
                     gmm = GMM.gmm(model.k)
                     vecs = self.get_vecs(model, batch_control.p_src_list, batch_control.p_src_lengths,
                                          parameters['batch_size'], use_cuda)
                     r = np.random.permutation(len(vecs))
-                    smp_num = int(len(vecs) * 0.5)
+                    smp_num = int(len(vecs) * 0.1)
                     vecs = np.array(vecs)[r, :][:smp_num]
                     self.logger.info("Begin GMM.")
                     print("Begin gmm")
@@ -387,11 +396,16 @@ class trainer(object):
                 #         loss_tot.backward()
                 # else:
                 #     loss.backward()
+                if parameters['info_loss']:
+                    info_loss = model.get_infoloss()
+                    loss = loss + info_loss * parameters['info_loss_weigt']
+
                 loss.backward()
-                torch.nn.utils.clip_grad_norm(model.parameters(), 2.0) # clip gradient
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0) # clip gradient
                 optimizer.step()
 
-                loss_float = float(loss.data[0])
+                # loss_float = float(loss.data[0])
+                loss_float = loss.data.item()
                 if (ii % parameters['verbose_freq'] == 0):
                     if model_type == 'VAE' or model_type == 'vnmt':
                         print(
@@ -419,6 +433,11 @@ class trainer(object):
                         logging.info('Batch %d, Loss %lf, bleu = %lf, bow_loss = %lf, bow_weight = %lf, rnn_loss = %lf' % (
                             ii, loss, self.check_bleu(decoder_input, model_output, batch_tgt_lengths), bow_loss,
                             bow_weight, loss - bow_weight*bow_loss))
+                    if parameters['info_loss']:
+                        print("Info_loss =", info_loss.item())
+                        logging.info(
+                            'Info_loss = %lf' % (info_loss.item()))
+
                 last_iter_loss = loss_float
                 epoch_average_loss += loss_float
 

@@ -12,7 +12,7 @@ class DotAttention(nn.Module):
 
         self.dim = dim
         self.attn_type = attn_type
-        self.sm = nn.Softmax()
+        self.sm = nn.Softmax() # dim = ?
         self.tanh = nn.Tanh()
         out_bias = self.attn_type == "mlp"
         self.linear_out = nn.Linear(dim * 2, dim, bias=out_bias)

@@ -2,6 +2,9 @@
 from __future__ import print_function
 from __future__ import unicode_literals
 from __future__ import division
+import sys
+sys.path.insert(0, '..')
+
 import torch
 from Model import vinilla_seq2seq
 from Model import vinilla_vae
@@ -19,6 +22,7 @@ import time
 
 import argparse
 import os
+
 
 # Parameters:
 def save_parameters(config_file, parameters, model_name, fn, fn_unparallel = None):
@@ -61,7 +65,7 @@ def read_parameters(config_file = None):
             'batch_first': True,  # 第一个维度是batch吗
             'min_sent_len': 1,  # 句子长度下限
             'max_sent_len': 128,  # 句子长度上限
-            'max_vocab_size': 100000,  # 词典大小上限。
+            'max_vocab_size': 50000,  # 词典大小上限。
             'remove_low_freq': 1,  # <= remove_low_freq, remove. 移走低频词。
             'batch_size': 64,  # Quaro: 64 MSCOCO: 128(try)
             'epoch_num': 60,  # 训练轮数
@@ -71,9 +75,9 @@ def read_parameters(config_file = None):
             # NN Parameters:
             'embedding_size': 128,
             'hidden_size': 256,
-            'learning_rate': 5e-4,  # (***) ADAM: [1e-3], 5e-4; SGD: 1e-2
+            'learning_rate': 1e-3,  # (***) ADAM: [1e-3], 5e-4; SGD: 1e-2
             'drop_out': 0.3,
-            'verbose_freq': 200,  # 隔多少个batch输出一次信息
+            'verbose_freq': 100,  # 隔多少个batch输出一次信息
             'stop_threshold': 1e-3,  # 这个现在没有用。
             'lr_decay': True,  # 是否学习率衰减。
             'lr_decay_period': 6000,  # 这个暂时也没有用。目前的衰减方案是训练集上loss上升或者训练过半。
@@ -96,8 +100,8 @@ def read_parameters(config_file = None):
             'beam_size': 5,
             # VAE:
             'share_encoder': True,  # vae 的encoding和decoding部分是否共享encoder。
-            'z_size': 256,  # (***) 隐空间维度: 建议：等于hidden_size 256
-            'z_sample_num': 1,  # vae采样z的个数
+            'z_size': 2,  # (***) 隐空间维度: 建议：等于hidden_size 256
+            'z_sample_num': 4,  # vae采样z的个数
             'training_z_sample_num': 1,  # 忽略
             'decoder_input_dropout': 0.0,  # encoder dropout概率，建议设成0.
             'active_func': 'None',  # 激活函数类型。不用激活函数就设成：'None'
@@ -117,38 +121,59 @@ def read_parameters(config_file = None):
             # Testing:
             'filter': 'maxbleu', # ['maxbleu', 'wmd'] 筛选方式。
             # gmmvae:
-            'k': 100, # !
+            'k': 20, # !
             'cluster_check_period': 20,  # 每隔多少个epoch输出一张聚类情况图
-            'batch_normalize': True,
+            'batch_normalize': False,
             'gmm_period': 80,
             'gmm_init_gaussian_parameters': False,
-            'cluster_loss': True,
+            'cluster_loss': False,
             'closs_lambda': 0.0,
             'adjust_gaussian_var': False,
             'pretrain_s2s': False, # !
-            's2s_model_fn': 'model_s2s_tl=50',
+            's2s_model_fn': 'models/model_s2s_tl=50.md',
             'alternating_training': False,
             'resample_gaussian': False,
             'different_lr': False,
             'vae_first_h': True,  # !
             'hidden_reconstruction_loss': False,
             'hidden_reconstruction_loss_w': 1.0,
-            'draw_pics': False,
-            'pics_dir': '34_k50_z256_re_s2s_noKA_noMax', # !
+            'draw_pics': True,
+            'pics_dir': '0_amazon_reviews_dim=2_meanZ_var=0.1(fix)_bow=1.0_klw=0.01_infoLoss', # !
             'kl_annealing_style': 'none', # ['faster', 'slower', 'none', 'fasterer'] # !
             'begin_with': 0.0, # !
             're_gaussian': False, # !
             # cls
-            'use_cls': False
+            'use_cls': False,
+            # save:
+            'ckpt_period': 5000,
+            'mean_zloss': True,  # !
+            'KLD_weight': 0.0,
+            'decoder_use_c': False, # 好像有问题！先设置成False吧！
+            'eval_mode': 'output_cluster',
+            'unconditional': True,
+            'get_c_from_z': False,
+            'sampling_period': 100,
+            'teacher_forcing_rate': 0.0,
+            # info loss
+            'info_loss': True,
+            'info_loss_weigt': 1.0
         }
         model_name = 'gmmvae'
         fn_quora = {
             'trn_src': '../data/quora_duplicate_questions_trn.src',
-            'trn_tgt': '../data/quora_duplicate_questions_trn.tgt',
+            'trn_tgt': '../data/quora_duplicate_questions_trn.src',  # tgt
             'dev_src': '../data/quora_duplicate_questions_dev.src',
             'dev_tgt': '../data/quora_duplicate_questions_dev.tgt',
             'test_src': '../data/quora_duplicate_questions_test.src.2',  # '../data/quora_duplicate_questions_test.src'
             'test_tgt': '../data/quora_duplicate_questions_test.tgt.2'  # '../data/quora_duplicate_questions_test.tgt'
+        }
+        fn_amazon = {
+            'trn_src': '/mnt/cephfs/lab/shiwenxian/dataset/amazon_reviews/laptop_reviews_sent.trn',
+            'trn_tgt': '/mnt/cephfs/lab/shiwenxian/dataset/amazon_reviews/laptop_reviews_sent.trn',
+            'dev_src': '/mnt/cephfs/lab/shiwenxian/dataset/amazon_reviews/laptop_reviews_sent.test',
+            'dev_tgt': '/mnt/cephfs/lab/shiwenxian/dataset/amazon_reviews/laptop_reviews_sent.test',
+            'test_src': '/mnt/cephfs/lab/shiwenxian/dataset/amazon_reviews/laptop_reviews_sent.test',
+            'test_tgt': '/mnt/cephfs/lab/shiwenxian/dataset/amazon_reviews/laptop_reviews_sent.test',
         }
         fn_quora_unparallel = {
             'trn_src': '../data/unparallel_questions',
@@ -162,7 +187,7 @@ def read_parameters(config_file = None):
             'test_src': '../data/mscoco_val.src',
             'test_tgt': '../data/mscoco_val.tgt'
         }
-        fn = fn_quora
+        fn = fn_amazon
         fn_unparallel = fn_quora_unparallel
         data = {
             'parameters': parameters,
@@ -340,7 +365,13 @@ def init_model(model_type, parameters):
                        resample_gaussian=parameters['resample_gaussian'],
                        batch_normalize=parameters['batch_normalize'],
                        vae_first_h=parameters['vae_first_h'],
-                       hidden_reconstruction=parameters['hidden_reconstruction_loss'])
+                       hidden_reconstruction=parameters['hidden_reconstruction_loss'],
+                       decoder_use_c=parameters['decoder_use_c'],
+                       get_c_from_z=parameters['get_c_from_z'],
+                       unconditional=parameters['unconditional'],
+                       teacher_forcing_rate=parameters['teacher_forcing_rate'],
+                       bos_idx=parameters['bos_idx'],
+                       eos_idx=parameters['eos_idx'])
     return model
 
 if __name__ == '__main__':
@@ -474,4 +505,5 @@ if __name__ == '__main__':
                        output_ref_file=output_ref_file_name,
                        output_all_trans=output_all_trans_file_name,
                        filter=parameters['filter'],
+                       eval_mode=parameters['eval_mode']
                        )
