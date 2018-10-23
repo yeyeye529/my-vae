@@ -6,8 +6,11 @@ import torch
 import numpy as np
 from torch.autograd import Variable
 import logging
+from sklearn import manifold
+import pandas as pd
 
 import matplotlib.pyplot as plt
+
 def aeq(*args):
     """
     Assert all arguments have the same value
@@ -229,8 +232,7 @@ def plot_embedding(embeddings, class_range, save_file_name, title=None, ):
     # if title is not None:
     #     plt.title(title)
 
-def plot_representation(xys, save_file_name, mus, vars):
-
+def plot_representation(xys, save_file_name, mus, vars, tsne = False):
     fig = plt.figure()
     ax1 = fig.add_subplot(111)
     plt.style.use('ggplot')  # ?
@@ -241,11 +243,25 @@ def plot_representation(xys, save_file_name, mus, vars):
     c_seed = 1
     # for c in embedding_label
 
+    xys = xys.data.cpu().numpy()
+    mus = mus.data.cpu().numpy()
+    vars = vars.data.cpu().numpy()
 
-
-    ax1.scatter(mus[:, 0], mus[:, 1], color = "teal")
-    make_ellipses(vars, mus, ax1)  # draw gaussian
-    ax1.scatter(xys[:, 0], xys[:, 1], color = "crimson")  # draw sample mus
+    if tsne:
+        tsne = manifold.TSNE(n_components=2, init='pca', random_state=501)
+        X_tsne = tsne.fit_transform(np.concatenate((xys, mus), axis=0))
+        ax1.scatter(X_tsne[:xys.shape[0], 0], X_tsne[:xys.shape[0], 1], color="crimson")  # draw sample mus
+        # center points
+        for i in range(mus.shape[0]):
+            ax1.scatter(X_tsne[xys.shape[0] + i, 0], X_tsne[xys.shape[0] + i, 1], color="black")
+            plt.text(X_tsne[xys.shape[0] + i, 0], X_tsne[xys.shape[0] + i, 1], i, color='red',
+                     fontsize=10)
+    else:
+        ax1.scatter(mus[:, 0], mus[:, 1], color = "teal")
+        make_ellipses(vars, mus, ax1)  # draw gaussian
+        ax1.scatter(xys[:, 0], xys[:, 1], color = "crimson")  # draw sample mus
+        for i in range(mus.shape[0]):  # add class label
+            plt.text(mus[i, 0], mus[i, 1], i, color='black', fontsize=10)
 
     fig.savefig(save_file_name)
     plt.close(fig)
