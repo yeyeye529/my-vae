@@ -40,7 +40,6 @@ class trainer(object):
         # none:
         if v == "none":
             # return 0.0
-            return 0.01
             return 1.0
 
         # slower:

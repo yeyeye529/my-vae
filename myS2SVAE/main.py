@@ -149,13 +149,13 @@ def read_parameters(config_file = None):
             'mean_zloss': True,  # !
             'KLD_weight': 0.0,
             'decoder_use_c': False, # 好像有问题！先设置成False吧！
-            'eval_mode': 'output_cluster',
-            'unconditional': True,
+            'eval_mode': 'normal',
+            'unconditional': True,  # cvae/conditional vae
             'get_c_from_z': False,
-            'sampling_period': 100,
+            'sampling_period': 100, # sampling sentences from prior.
             'teacher_forcing_rate': 0.0,
             # info loss
-            'info_loss': True,
+            'info_loss': True,  # 目前好像有点问题。
             'info_loss_weigt': 1.0
         }
         model_name = 'gmmvae'
