@@ -1,11 +1,11 @@
 not finished yet.
 
 
-##todo:
+### todo:
 
 把Model.py里的代码整理一下……
 
-##命令行参数：
+### 命令行参数：
 
 -t/-p：训练/预测模式
 
